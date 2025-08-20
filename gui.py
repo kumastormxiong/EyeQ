@@ -1,11 +1,11 @@
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                           QSlider, QPushButton, QTextEdit, QLineEdit, QListWidget, 
-                          QListWidgetItem, QMessageBox, QFrame, QSizePolicy, QDialog, QCheckBox, QComboBox, QFormLayout, QSystemTrayIcon, QMenu, QAction, QGraphicsBlurEffect)
+                          QListWidgetItem, QMessageBox, QFrame, QSizePolicy, QDialog, QCheckBox, QComboBox, QFormLayout, QSystemTrayIcon, QMenu, QAction, QGraphicsBlurEffect, QTextBrowser, QStyle)
 from PyQt5.QtCore import Qt, QPoint, QSize, pyqtSignal, QEvent
 from PyQt5.QtGui import QIcon, QPixmap, QFont, QColor, QPalette, QBrush, QLinearGradient
 import os
 import pyperclip
-from screenshot import take_area_screenshot
+from screenshot import ScreenShotWidget  # 直接导入截图窗口类
 from api_client import send_question
 from database import insert_screenshot, insert_conversation
 from datetime import datetime
@@ -14,6 +14,12 @@ import keyboard
 from markdown2 import markdown
 from PyQt5.QtWidgets import QTextBrowser
 from database import get_or_create_user, load_conversations, get_db_path, check_user_password, get_user_stats
+from PyQt5.QtGui import QPainter, QColor, QBrush
+from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QGraphicsBlurEffect, QWidget
+from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel
+from PyQt5.QtCore import Qt
+
 
 class BubbleTextBrowser(QTextBrowser):
     doubleClicked = pyqtSignal()
@@ -197,7 +203,40 @@ class ModernFrame(QFrame):
 class SettingsDialog(QDialog):
     def __init__(self, parent=None, config_path=None):
         super().__init__(parent)
-        self.setWindowTitle('设置')
+        self.setWindowTitle("设置")
+        self.setStyleSheet("""
+            QDialog {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #262b33, stop:1 #191c23);
+                border-radius: 12px;
+                font-family: 'Microsoft YaHei';
+            }
+            QLabel, QCheckBox, QLineEdit, QComboBox {
+                color: #f0f0f0;
+                font-size: 15px;
+                font-family: 'Microsoft YaHei';
+            }
+            QLineEdit, QComboBox {
+                background: #323741;
+                border: 1px solid #444a55;
+                border-radius: 6px;
+                padding: 4px 8px;
+                color: #f0f0f0;
+                font-family: 'Microsoft YaHei';
+            }
+            QPushButton {
+                background: #222;
+                color: #fff;
+                border-radius: 6px;
+                font-size: 15px;
+                font-weight: bold;
+                min-width: 60px;
+                min-height: 28px;
+                font-family: 'Microsoft YaHei';
+            }
+            QPushButton:hover {
+                background: #444a55;
+            }
+        """)
         self.setFixedSize(320, 220)
         self.bg = FrostedGlassBg(self)
         self.bg.setGeometry(0, 0, 320, 220)
@@ -297,118 +336,229 @@ class MainWindow(QMainWindow):
         self._drag_pos = None
         self.screenshot_path = None
         self.screenshot_id = None
+        self.current_screenshot_path = None  # 添加当前截图路径的初始化
         self.api_key = self.load_api_key()
         self.screenshot_dir = self.load_screenshot_dir()
         self.hotkey_update_callback = hotkey_update_callback
         self.screenshot_request.connect(self.screenshot_and_ask_mainthread)
         self.answer_ready.connect(self.replace_answer_bubble)
+        self.screenshot_widget = None
+        
+        # 初始化UI组件
+        self._init_ui()
+        
+        # 加载用户设置和窗口几何信息
+        self.load_user_settings()
+        self.load_window_geometry()
+        
+        # 创建系统托盘
+        self._create_tray_icon()
+        
+        # 加载历史记录
+        self.load_history()
 
-        # 分层布局，底层为磨砂背景，上层为内容
+    def __init__(self, user_id, hotkey_update_callback=None):
+        super().__init__()
+        self.user_id = user_id
+        self.config_path = os.path.join(os.path.dirname(__file__), 'config.ini')
+        self.setWindowTitle('EyeQ')
+        icon_path = os.path.join(os.path.dirname(__file__), 'assets', 'icon.ico')
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+        
+        # 移除置顶，允许调整大小
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        
+        self._drag_pos = None
+        self.screenshot_path = None
+        self.screenshot_id = None
+        self.current_screenshot_path = None  # 添加当前截图路径的初始化
+        self.api_key = self.load_api_key()
+        self.screenshot_dir = self.load_screenshot_dir()
+        self.hotkey_update_callback = hotkey_update_callback
+        self.screenshot_request.connect(self.screenshot_and_ask_mainthread)
+        self.answer_ready.connect(self.replace_answer_bubble)
+        self.screenshot_widget = None
+        
+        # 初始化UI组件
+        self._init_ui()
+        
+        # 加载用户设置和窗口几何信息
+        self.load_user_settings()
+        self.load_window_geometry()
+        
+        # 创建系统托盘
+        self._create_tray_icon()
+        
+        # 加载历史记录
+        self.load_history()
+
+    def _init_ui(self):
+        """初始化用户界面"""
+        # 创建中央窗口部件
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        
+        # 创建背景
         self.bg = FrostedGlassBg(self)
+        self.bg.setGeometry(self.rect())
+        
+        # 创建内容容器
         self.content_container = QWidget(self)
-        self.main_layout = QVBoxLayout(self.content_container)
-        self.main_layout.setContentsMargins(15, 15, 15, 15)
-        self.main_layout.setSpacing(6)
-
-        # 标题栏
-        self.header_frame = QFrame()
-        self.header_layout = QHBoxLayout(self.header_frame)
-        self.header_layout.setContentsMargins(0, 0, 0, 0)
-        self.title_label = QLabel('EyeQ')
-        self.title_label.setFont(QFont('Microsoft YaHei', 12, QFont.Bold))
-        self.title_label.setStyleSheet("color: white; background: transparent;")
-        self.new_chat_btn = ModernButton('N')
-        self.new_chat_btn.setFixedWidth(80)
-        self.new_chat_btn.clicked.connect(self.new_chat)
+        self.content_container.setGeometry(self.rect())
         
-        self.info_btn = ModernButton('H')
-        self.info_btn.setFixedWidth(80)
-        self.info_btn.clicked.connect(self.show_info)
-
-        self.close_btn = QPushButton('×')
-        self.close_btn.setFixedSize(28, 28)
-        self.close_btn.setFont(QFont('Arial', 14))
-        self.close_btn.clicked.connect(self.close)
-        self.close_btn.setStyleSheet("QPushButton { background: transparent; color: white; border: none; } QPushButton:hover { color: #4682b4; }")
+        # 创建主布局
+        main_layout = QVBoxLayout(self.content_container)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(15)
         
-        self.header_layout.addWidget(self.title_label)
-        self.header_layout.addWidget(self.new_chat_btn)
-        self.header_layout.addWidget(self.info_btn)
-        self.header_layout.addStretch()
-        self.header_layout.addWidget(self.close_btn)
-        self.main_layout.addWidget(self.header_frame)
-
-        # Author Label
-        # self.author_label = QLabel('by 虚空造物')
-        # self.author_label.setFont(QFont('Microsoft YaHei', 8))
-        # self.author_label.setStyleSheet("color: #aaa; background: transparent;")
-        # self.author_label.setAlignment(Qt.AlignCenter)
-        # self.main_layout.addWidget(self.author_label)
-
-        # 截图缩略图显示区
-        self.screenshot_thumb = QLabel()
-        self.screenshot_thumb.setFixedSize(70, 50)
-        self.screenshot_thumb.setScaledContents(True)
-        self.screenshot_thumb.hide()
-        self.main_layout.addWidget(self.screenshot_thumb, alignment=Qt.AlignLeft)
-        # 操作区
-        self.action_frame = QFrame()
-        self.action_frame.setStyleSheet("background: transparent;")
-        self.action_layout = QHBoxLayout(self.action_frame)
-        self.action_layout.setContentsMargins(0, 0, 0, 0)
-        # 移除截图按钮相关代码
-        # self.screenshot_btn = ModernButton('截图')
-        # self.screenshot_btn.setMinimumWidth(60)
-        # self.screenshot_btn.clicked.connect(self.screenshot_request.emit)
-        # self.action_layout.addWidget(self.screenshot_btn)
-        # self.content_layout.addWidget(self.action_frame)
-        # 不再添加action_frame到content_layout
-        # 输入区
-        self.input_frame = ModernFrame()
-        self.input_layout = QHBoxLayout(self.input_frame)
-        self.input_line = CustomTextEdit()
-        self.input_line.setFont(QFont('Microsoft YaHei', 10))
-        self.input_line.setStyleSheet("QTextEdit { background: #23262b; color: #f0f0f0; border-radius: 8px; padding: 8px; border: none; }")
-        self.input_line.return_pressed.connect(self.ask_question)
-        self.input_line.setFixedHeight(60) # 初始高度
-        self.input_layout.addWidget(self.input_line)
-        self.main_layout.addWidget(self.input_frame)
-        # 聊天历史区
-        self.history_frame = ModernFrame()
-        self.history_layout = QVBoxLayout(self.history_frame)
+        # 创建标题栏
+        title_bar = self._create_title_bar()
+        main_layout.addWidget(title_bar)
+        
+        # 输入框在上方
+        input_container = self._create_input_area()
+        main_layout.addWidget(input_container)
+        
+        # 聊天历史区在下方，初始不显示且不占空间
         self.history_list = QListWidget()
-        self.history_list.setStyleSheet("QListWidget { background: transparent; border: none; } QScrollBar:vertical {width:0px;}")
-        self.history_layout.addWidget(self.history_list)
-        self.main_layout.addWidget(self.history_frame)
+        self.history_list.setStyleSheet("""
+            QListWidget {
+                background: transparent;
+                border: none;
+                outline: none;
+                font-family: 'Microsoft YaHei';
+            }
+            QListWidget::item {
+                background: transparent;
+                border: none;
+                padding: 5px;
+                font-family: 'Microsoft YaHei';
+            }
+            QScrollBar:vertical, QScrollBar:horizontal {
+                width: 0px; height: 0px; background: transparent; }
+        """)
+        self.history_list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.history_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.history_list.hide()  # 启动时隐藏
+        main_layout.addWidget(self.history_list)
+        self.history_list.setMaximumHeight(0)  # 不占空间
+        
+        # 设置窗口初始高度为最小，仅显示标题栏和输入框
+        self.setFixedHeight(150)
+        self.setMinimumHeight(150)
+        self.setMaximumHeight(150)
+        self.resize(450, 150)
+
+    def _create_input_area(self):
+        input_container = QWidget()
+        input_container.setStyleSheet("background: transparent;")
+        layout = QVBoxLayout(input_container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        self.input_line = CustomTextEdit()
+        self.input_line.setFixedHeight(80)
+        self.input_line.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.input_line.setWordWrapMode(True)
+        self.input_line.setStyleSheet("""
+            QTextEdit {
+                background: rgba(60, 65, 75, 0.8);
+                border: 2px solid rgba(100, 110, 130, 0.5);
+                border-radius: 8px;
+                color: #f0f0f0;
+                font-size: 18px;
+                font-weight: bold;
+                font-family: 'Microsoft YaHei';
+                padding: 8px;
+            }
+            QTextEdit:focus {
+                border: 2px solid rgba(120, 140, 180, 0.8);
+            }
+            QScrollBar:vertical {width:0px; background:transparent;}
+        """)
+        self.input_line.setPlaceholderText("输入问题或按Alt+Q截图...")
+        self.input_line.return_pressed.connect(self.ask_question)
+        layout.addWidget(self.input_line)
+        return input_container
+
+    def _auto_resize_input(self):
+        doc = self.input_line.document()
+        doc_height = doc.size().height()
+        min_h = 40
+        max_h = 200
+        new_h = max(min_h, min(int(doc_height + 16), max_h))
+        self.input_line.setFixedHeight(new_h)
+
+    def _create_title_bar(self):
+        """创建标题栏"""
+        title_bar = QWidget()
+        title_bar.setFixedHeight(40)
+        title_bar.setStyleSheet("background: transparent;")
+        layout = QHBoxLayout(title_bar)
+        layout.setContentsMargins(0, 0, 0, 0)
+        # 标题
+        title_label = QLabel("EyeQ AI")
+        title_label.setStyleSheet("color: #f0f0f0; font-size: 16px; font-weight: bold; font-family: 'Microsoft YaHei';")
+        layout.addWidget(title_label)
+        layout.addStretch()
+        # 按钮区域
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(8)
+        btn_style = "color:#fff; background:#222; border-radius:6px; font-size:18px; font-weight:bold; min-width:32px; min-height:30px; max-width:32px; max-height:30px; padding:0; font-family: 'Microsoft YaHei';"
         # 新建对话按钮
-        # self.new_chat_btn = ModernButton('新建对话') # Moved to header_layout
-        # self.new_chat_btn.setFixedWidth(80)
-        # self.new_chat_btn.clicked.connect(self.new_chat)
-        # self.header_layout.insertWidget(1, self.new_chat_btn)
-        # 极简去除footer、分割线、设置等
+        new_btn = ModernButton("N", title_bar)
+        new_btn.setStyleSheet(btn_style)
+        new_btn.setFixedSize(32, 30)
+        new_btn.clicked.connect(self.new_chat)
+        button_layout.addWidget(new_btn)
+        # 设置按钮
+        settings_btn = ModernButton("S", title_bar)
+        settings_btn.setStyleSheet(btn_style)
+        settings_btn.setFixedSize(32, 30)
+        settings_btn.clicked.connect(self.open_settings)
+        button_layout.addWidget(settings_btn)
+        # 帮助按钮
+        help_btn = ModernButton("H", title_bar)
+        help_btn.setStyleSheet(btn_style)
+        help_btn.setFixedSize(32, 30)
+        help_btn.clicked.connect(self.show_info)
+        button_layout.addWidget(help_btn)
+        # 退出按钮
+        exit_btn = ModernButton("X", title_bar)
+        exit_btn.setStyleSheet(btn_style)
+        exit_btn.setFixedSize(32, 30)
+        exit_btn.clicked.connect(self.exit_app)
+        button_layout.addWidget(exit_btn)
+        layout.addLayout(button_layout)
+        return title_bar
+
+    def _create_tray_icon(self):
+        """创建系统托盘图标"""
         self.tray_icon = QSystemTrayIcon(self)
-        icon = QIcon(icon_path) if os.path.exists(icon_path) else QIcon()
-        if icon.isNull():  # 如果图标为空，创建一个默认图标
-            from PyQt5.QtGui import QPixmap
-            pixmap = QPixmap(32, 32)
-            pixmap.fill(QColor(70, 130, 180))
-            icon = QIcon(pixmap)
-        self.tray_icon.setIcon(icon)
+        icon_path = os.path.join(os.path.dirname(__file__), 'assets', 'icon.ico')
+        if os.path.exists(icon_path):
+            self.tray_icon.setIcon(QIcon(icon_path))
+        else:
+            # 如果没有图标文件，使用默认图标
+            self.tray_icon.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon))
+        
+        # 创建托盘菜单
         tray_menu = QMenu()
-        show_action = QAction('显示', self)
+        
+        show_action = QAction("显示", self)
         show_action.triggered.connect(self.show_and_raise)
         tray_menu.addAction(show_action)
-        exit_action = QAction('退出', self)
+        
+        tray_menu.addSeparator()
+        
+        exit_action = QAction("退出", self)
         exit_action.triggered.connect(self.exit_app)
         tray_menu.addAction(exit_action)
+        
         self.tray_icon.setContextMenu(tray_menu)
         self.tray_icon.activated.connect(self.on_tray_activated)
         self.tray_icon.show()
-        self.answer_ready.connect(self.replace_answer_bubble) # 连接信号到槽
-        # 在__init__的末尾调用
-        self.load_history()
-        # 聊天历史区磨砂背景（只对frame，不对气泡）
-        # self.history_frame.setGraphicsEffect(self._create_blur_effect()) # 移除此行
 
     def show_and_raise(self):
         self.showNormal()
@@ -463,8 +613,9 @@ class MainWindow(QMainWindow):
         event.accept()
 
     def showEvent(self, event):
-        # 窗口显示时的处理，不再处理剪贴板
         super().showEvent(event)
+        # 安装事件过滤器
+        self.input_line.installEventFilter(self)
 
     def show_and_fill_text(self, text):
         self.show_and_raise()
@@ -516,33 +667,33 @@ class MainWindow(QMainWindow):
         question = self.input_line.toPlainText().strip()
         if not question:
             return
-        
-        thinking_item = self.add_chat_bubble(question, '正在思考……', is_markdown=False)
+        thinking_item = self.add_chat_bubble(question, '', is_markdown=False)
         self.input_line.clear()
-
+        self._current_bubble = None  # Reset for new question
         def do_reply():
             try:
                 q_lower = question.lower()
-                # 模型身份相关问题固定回复
                 if any(x in q_lower for x in ['你是什么模型', '你是谁']):
                     answer = '您好，我是EyeQ，一个由AI驱动的视觉助手。'
                     self.answer_ready.emit(thinking_item, answer, False)
                     return
-
                 if not self.api_key or self.api_key == '你的通义千问API密钥':
                     self.answer_ready.emit(thinking_item, 'API密钥未设置，请在config.ini中填写。', False)
                     return
-                
-                from api_client import send_question
+                from api_client import stream_question
                 from database import insert_conversation
                 from datetime import datetime
-                answer = send_question(self.api_key, question, self.screenshot_path)
-                self.answer_ready.emit(thinking_item, answer, True)
+                screenshot_path = getattr(self, 'current_screenshot_path', None)
+                # 流式获取内容
+                last_content = ''
+                for partial in stream_question(self.api_key, question, screenshot_path):
+                    # 只追加新内容
+                    self.answer_ready.emit(thinking_item, partial, True)
+                    last_content = partial
                 timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                insert_conversation(self.user_id, question, answer, self.screenshot_id, timestamp)
+                insert_conversation(self.user_id, question, last_content, self.screenshot_id, timestamp)
             except Exception as e:
                 self.answer_ready.emit(thinking_item, f'发送失败: {str(e)}', False)
-
         import threading
         threading.Thread(target=do_reply, daemon=True).start()
 
@@ -551,8 +702,11 @@ class MainWindow(QMainWindow):
         config = configparser.ConfigParser()
         if os.path.exists(self.config_path):
             config.read(self.config_path, encoding='utf-8')
-            self.hotkey = config.get('Window', 'hotkey', fallback='Ctrl+Alt+A')
+            self.hotkey = config.get('Window', 'hotkey', fallback='Alt+Q')
             self.enter_send = config.getboolean('Window', 'enter_send', fallback=True)
+        else:
+            self.hotkey = 'Alt+Q'
+            self.enter_send = True
 
     def open_settings(self):
         dlg = SettingsDialog(self, self.config_path)
@@ -563,10 +717,10 @@ class MainWindow(QMainWindow):
                 self.hotkey_update_callback(self.hotkey)
             # 重新绑定回车事件
             if self.enter_send:
-                self.input_line.returnPressed.connect(self.ask_question)
+                self.input_line.return_pressed.connect(self.ask_question)
             else:
                 try:
-                    self.input_line.returnPressed.disconnect()
+                    self.input_line.return_pressed.disconnect()
                 except:
                     pass 
 
@@ -585,27 +739,89 @@ class MainWindow(QMainWindow):
 
     def screenshot_and_ask_mainthread(self):
         """
-        在主线程中执行截图操作，并处理后续逻辑。
-        由热键或按钮点击触发。
+        主线程中处理截图请求的槽函数。
         """
+        # 隐藏主窗口以便截图
         self.hide()
-        from screenshot import take_area_screenshot
-        screenshot_path = take_area_screenshot(self.screenshot_dir)
+        # 每次都新建截图窗口，避免信号重复连接和资源冲突
+        save_dir = self.load_screenshot_dir()
+        screenshot_widget = ScreenShotWidget(save_dir)
+        screenshot_widget.screenshot_done.connect(self.on_screenshot_finished)
+        screenshot_widget.showFullScreen()
+        self.screenshot_widget = screenshot_widget  # 临时引用
+
+    def on_screenshot_finished(self, screenshot_path):
+        """
+        截图完成后的回调槽函数。
+        """
+        if self.screenshot_widget:
+            self.screenshot_widget.hide()
+            self.screenshot_widget.deleteLater()
+            self.screenshot_widget = None
         self.show_and_raise()
-        if not screenshot_path:
-            QMessageBox.warning(self, '截图失败', '未获取到截图')
-            return
-        from database import insert_screenshot
-        from datetime import datetime
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        self.screenshot_id = insert_screenshot(self.user_id, screenshot_path, timestamp)
-        self.screenshot_path = screenshot_path
-        pixmap = QPixmap(screenshot_path)
-        if not pixmap.isNull():
-            self.screenshot_thumb.setPixmap(pixmap.scaled(self.screenshot_thumb.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            self.screenshot_thumb.show()
-        self.input_line.setFocus() 
+        print(f"调试信息 - 截图完成回调，路径: {screenshot_path}")
+        if screenshot_path:
+            self.current_screenshot_path = screenshot_path
+            print(f"调试信息 - 设置current_screenshot_path: {self.current_screenshot_path}")
+            self.input_line.clear()
+            from PyQt5.QtGui import QTextCursor, QTextImageFormat
+            cursor = self.input_line.textCursor()
+            img_format = QTextImageFormat()
+            img_format.setName(screenshot_path)
+            img_format.setWidth(100)
+            img_format.setHeight(100)
+            cursor.insertImage(img_format)
+            self.input_line.insertPlainText("\n请输入问题...")
+            self.input_line.setFocus()
+            self.input_line.installEventFilter(self)
+        else:
+            self.current_screenshot_path = None
+            print("调试信息 - 截图被取消，current_screenshot_path设为None")
+
+    # 增加图片缩放功能
+    def zoomImage(self, img_path):
+        from PyQt5.QtWidgets import QLabel, QDialog, QVBoxLayout
+        from PyQt5.QtGui import QPixmap
+        dlg = QDialog(self)
+        dlg.setWindowTitle("图片预览")
+        vbox = QVBoxLayout(dlg)
+        label = QLabel()
+        pix = QPixmap(img_path)
+        label.setPixmap(pix)
+        label.setScaledContents(True)
+        label.setMinimumSize(400, 300)
+        vbox.addWidget(label)
+        dlg.setLayout(vbox)
+        dlg.resize(pix.width(), pix.height())
+        dlg.exec_()
+
+    # 重载eventFilter，捕获输入框图片点击事件
+    def eventFilter(self, obj, event):
+        if obj == self.input_line and event.type() == event.MouseButtonRelease:
+            print("调试信息 - 捕获到输入框鼠标释放事件")
+            cursor = self.input_line.cursorForPosition(event.pos())
+            fmt = cursor.charFormat()
+            print(f"调试信息 - charFormat isImageFormat: {fmt.isImageFormat()}")
+            if fmt.isImageFormat():
+                img_path = fmt.toImageFormat().name()
+                print(f"调试信息 - 点击图片路径: {img_path}")
+                self.zoomImage(img_path)
+                return True
+        return super().eventFilter(obj, event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # 安装事件过滤器
+        self.input_line.installEventFilter(self)
+
     def add_chat_bubble(self, question, answer, is_markdown=True):
+        # 首次有回复时显示历史区并扩展窗口高度
+        if not self.history_list.isVisible():
+            self.history_list.show()
+            self.history_list.setMaximumHeight(16777215)  # 恢复最大高度
+            self.setMinimumHeight(150)
+            self.setMaximumHeight(16777215)
+            self.resize(self.width(), 650)
         # 问题气泡（左）
         q_item = QListWidgetItem()
         q_widget = QWidget()
@@ -615,7 +831,6 @@ class MainWindow(QMainWindow):
         q_label = BubbleTextBrowser()
         q_label.doubleClicked.connect(lambda b=q_label: self.zoom_bubble(b))
         q_label.setOpenExternalLinks(True)
-        # 聊天气泡不设置任何模糊/透明，保证文字清晰
         q_label.setStyleSheet('background: #3c414b; color: #f0f0f0; border-radius: 12px; padding: 8px 12px; max-width: 320px; border: none;')
         q_label.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         q_label.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -676,19 +891,23 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'zoomed_browser') and self.zoomed_browser:
             self.zoomed_browser.setFixedSize(self.original_geometry.width(), self.original_geometry.height())
             self.zoomed_browser = None
+
+# 支持多气泡弹窗
     def replace_answer_bubble(self, a_item, answer, is_markdown=True):
-        a_widget = self.history_list.itemWidget(a_item)
-        if a_widget:
-            a_label = a_widget.findChild(QTextBrowser)
-            if a_label:
-                if is_markdown:
-                    a_label.setHtml(markdown(answer))
-                else:
-                    a_label.setHtml(f'<span>{answer}</span>')
-                # 调整大小以适应新内容
-                a_label.adjustSize()
-                a_widget.adjustSize()
-                a_item.setSizeHint(a_widget.sizeHint()) 
+        if not hasattr(self, '_current_bubble') or self._current_bubble is None:
+            self._current_bubble = BubbleWindow(answer)
+            geo = self.geometry()
+            x = geo.x() + geo.width() + 20
+            y = geo.y()
+            self._current_bubble.move(x, y)
+            self._current_bubble.show()
+        else:
+            self._current_bubble.setText(answer)
+            self._current_bubble.adjustSize()
+            self._current_bubble.raise_()
+
+    def add_chat_bubble(self, question, answer, is_markdown=True):
+        return None
 
     def load_history(self):
         """
@@ -747,6 +966,115 @@ class MainWindow(QMainWindow):
             
     def resizeEvent(self, event):
         """同步调整背景和内容区大小"""
-        self.bg.setGeometry(self.rect())
-        self.content_container.setGeometry(self.rect())
+        if hasattr(self, 'bg') and self.bg:
+            self.bg.setGeometry(self.rect())
+        if hasattr(self, 'content_container') and self.content_container:
+            self.content_container.setGeometry(self.rect())
         super().resizeEvent(event) 
+
+# 统一帮助弹窗样式
+from PyQt5.QtWidgets import QMessageBox
+old_information = QMessageBox.information
+old_warning = QMessageBox.warning
+
+def themed_information(parent, title, text):
+    box = QMessageBox(parent)
+    box.setWindowTitle(title)
+    box.setText(text)
+    box.setIcon(QMessageBox.Information)
+    box.setStyleSheet("""
+        QMessageBox {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #262b33, stop:1 #191c23);
+            border-radius: 12px;
+            font-family: 'Microsoft YaHei';
+        }
+        QLabel {
+            color: #f0f0f0;
+            font-size: 15px;
+            font-family: 'Microsoft YaHei';
+        }
+        QPushButton {
+            background: #222;
+            color: #fff;
+            border-radius: 6px;
+            font-size: 15px;
+            font-weight: bold;
+            min-width: 60px;
+            min-height: 28px;
+            font-family: 'Microsoft YaHei';
+        }
+        QPushButton:hover {
+            background: #444a55;
+        }
+    """)
+    return box.exec_()
+
+def themed_warning(parent, title, text):
+    box = QMessageBox(parent)
+    box.setWindowTitle(title)
+    box.setText(text)
+    box.setIcon(QMessageBox.Warning)
+    box.setStyleSheet("""
+        QMessageBox {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #262b33, stop:1 #191c23);
+            border-radius: 12px;
+            font-family: 'Microsoft YaHei';
+        }
+        QLabel {
+            color: #f0f0f0;
+            font-size: 15px;
+            font-family: 'Microsoft YaHei';
+        }
+        QPushButton {
+            background: #222;
+            color: #fff;
+            border-radius: 6px;
+            font-size: 15px;
+            font-weight: bold;
+            min-width: 60px;
+            min-height: 28px;
+            font-family: 'Microsoft YaHei';
+        }
+        QPushButton:hover {
+            background: #444a55;
+        }
+    """)
+    return box.exec_()
+
+QMessageBox.information = themed_information
+QMessageBox.warning = themed_warning 
+
+class BubbleWindow(QDialog):
+    def __init__(self, text, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setStyleSheet('''
+            QDialog {
+                background-color: #323741;
+                border-radius: 16px;
+                border: 1px solid #444a55;
+            }
+            QTextBrowser {
+                color: #f0f0f0;
+                font-size: 16px;
+                font-family: 'Microsoft YaHei';
+                background-color: transparent;
+                border: none;
+                padding: 16px;
+            }
+        ''')
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.browser = QTextBrowser()
+        self.browser.setHtml(markdown(text))
+        self.browser.setOpenExternalLinks(True)
+        layout.addWidget(self.browser)
+        self.adjustSize()
+        self.setMaximumWidth(480)
+        self.setMinimumWidth(180)
+        self.setMinimumHeight(60)
+
+    def setText(self, text):
+        self.browser.setHtml(markdown(text))
+        self.adjustSize() 

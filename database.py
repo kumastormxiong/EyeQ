@@ -1,15 +1,21 @@
-import sqlite3
+import sys
 import os
+import sqlite3
 import hashlib
 
 def get_db_path():
     """
     获取数据库文件的绝对路径。
-    如果data目录不存在，则会创建它。
-    
+    打包后在exe同级目录创建data目录，开发环境下在当前文件同级。
     :return: 数据库文件的完整路径 (str)
     """
-    data_dir = os.path.join(os.path.dirname(__file__), 'data')
+    if getattr(sys, 'frozen', False):
+        # 打包后，取exe所在目录
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        # 开发环境，取当前文件目录
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+    data_dir = os.path.join(base_dir, 'data')
     if not os.path.exists(data_dir):
         os.makedirs(data_dir)
     return os.path.join(data_dir, 'conversations.db')

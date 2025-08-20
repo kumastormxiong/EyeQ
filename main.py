@@ -40,8 +40,18 @@ class HotkeyManager:
                 keyboard.remove_hotkey(self.current_hotkey)
             except Exception:
                 pass
-        self.current_hotkey = hotkey
-        keyboard.add_hotkey(hotkey, self.on_hotkey)
+        try:
+            keyboard.add_hotkey(hotkey, self.on_hotkey)
+            self.current_hotkey = hotkey
+        except ValueError as e:
+            # 发生解析错误时回退到安全默认值 Alt+Q
+            fallback = 'alt+q'
+            print(f'热键 "{hotkey}" 无效，回退到默认值 {fallback}:', e)
+            try:
+                keyboard.add_hotkey(fallback, self.on_hotkey)
+                self.current_hotkey = fallback
+            except Exception as e2:
+                print('无法注册默认热键 Alt+Q:', e2)
 
     def on_hotkey(self):
         """
@@ -68,10 +78,10 @@ def main():
         import configparser
         config_path = get_config_path()
         config = configparser.ConfigParser()
-        hotkey = 'Alt+·'  # 默认值
+        hotkey = 'alt+q'  # 默认值
         if os.path.exists(config_path):
             config.read(config_path, encoding='utf-8')
-            hotkey = config.get('Window', 'hotkey', fallback='Ctrl+Alt+A')
+            hotkey = config.get('Window', 'hotkey', fallback='alt+q')
 
         # 创建主窗口，并传入用户ID
         window = MainWindow(user_id=user_id, hotkey_update_callback=None)

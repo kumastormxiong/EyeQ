@@ -1,0 +1,8 @@
+PyQt5>=5.15.0
+keyboard>=0.13.5
+pyautogui>=0.9.54
+requests>=2.25.1
+pyperclip>=1.8.2
+pillow>=8.2.0
+markdown2>=2.4.0
+cx_Freeze>=6.9 

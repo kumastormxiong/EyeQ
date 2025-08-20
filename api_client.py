@@ -2,6 +2,7 @@ import requests
 import base64
 import os
 from mimetypes import guess_type
+import time
 
 def encode_image_to_base64(image_path):
     """
@@ -84,3 +85,12 @@ def send_question(api_key, question, image_path=None):
         return result['choices'][0].get('message', {}).get('content', '')
     else:
         return f"API返回格式错误: {result}" 
+
+def stream_question(api_key, question, image_path=None):
+    """
+    模拟流式返回：每次yield一小段内容（如API不支持流式）。
+    """
+    answer = send_question(api_key, question, image_path)
+    for i in range(1, len(answer)+1):
+        yield answer[:i]
+        time.sleep(0.02) 

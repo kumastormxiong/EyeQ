@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 from PIL import Image, ImageGrab
 from PyQt5.QtWidgets import QWidget, QApplication, QLabel, QMessageBox, QDialog
-from PyQt5.QtCore import Qt, QRect, QPoint, QSize, QEventLoop
+from PyQt5.QtCore import Qt, QRect, QPoint, QSize, QEventLoop, pyqtSignal
 from PyQt5.QtGui import QPainter, QColor, QPen, QBrush, QFont
 
 # 全屏截图
@@ -28,6 +28,8 @@ class ScreenShotWidget(QDialog):
     一个用于区域截图的自定义Qt窗口。
     它会创建一个全屏的半透明遮罩，用户可以通过拖动鼠标选择一个矩形区域进行截图。
     """
+    screenshot_done = pyqtSignal(str)  # 定义截图完成信号
+
     def __init__(self, save_dir):
         """
         初始化截图窗口。
@@ -82,7 +84,7 @@ class ScreenShotWidget(QDialog):
             qp.setRenderHint(QPainter.Antialiasing)
             
             # 绘制半透明的黑色遮罩
-            mask = QColor(0, 0, 0, 150)
+            mask = QColor(0, 0, 0, 120)
             qp.fillRect(self.rect(), mask)
             
             # 计算选择的矩形区域
@@ -147,6 +149,7 @@ class ScreenShotWidget(QDialog):
         """
         if event.key() == Qt.Key_Escape:
             self.screenshot_path = None
+            self.screenshot_done.emit(None) # 发射信号，通知截图取消
             self.close()
         else:
             super().keyPressEvent(event)
@@ -155,6 +158,7 @@ class ScreenShotWidget(QDialog):
         """当鼠标按下时，记录截图的起始点。右键单击则取消截图。"""
         if event.button() == Qt.RightButton:
             self.screenshot_path = None
+            self.screenshot_done.emit(None) # 发射信号，通知截图取消
             self.close()
             return
 
@@ -174,7 +178,8 @@ class ScreenShotWidget(QDialog):
         self.update()
         self.capture_and_save()
         self.hide()
-        self.deleteLater()
+        self.screenshot_done.emit(self.screenshot_path) # 发射信号，传递路径
+        # self.deleteLater() # 改为hide，由主窗口管理
 
     def capture_and_save(self):
         """
@@ -217,21 +222,21 @@ class ScreenShotWidget(QDialog):
             img.save(file_path)
             self.screenshot_path = file_path
 
-# 区域截图入口
-def take_area_screenshot(save_dir):
-    """
-    区域截图功能的入口函数。
-    它会创建并显示一个ScreenShotWidget实例，并等待其关闭，然后返回截图路径。
-
-    :param save_dir: 截图文件的保存目录 (str)
-    :return: 截图文件的完整路径 (str)，如果截图失败或取消则返回None
-    """
-    app = QApplication.instance()
-    if app is None:
-        # 确保此功能在有QApplication实例的情况下被调用
-        raise RuntimeError("截图功能必须在主程序事件循环下调用，不应单独创建QApplication实例！")
-    
-    widget = ScreenShotWidget(save_dir)
-    # 使用exec_()来显示窗口，并阻塞直到它关闭
-    widget.exec_()
-    return widget.screenshot_path 
+# 区域截图入口 (此函数已不再需要，直接在gui.py中使用ScreenShotWidget)
+# def take_area_screenshot(save_dir):
+#     """
+#     区域截图功能的入口函数。
+#     它会创建并显示一个ScreenShotWidget实例，并等待其关闭，然后返回截图路径。
+#
+#     :param save_dir: 截图文件的保存目录 (str)
+#     :return: 截图文件的完整路径 (str)，如果截图失败或取消则返回None
+#     """
+#     app = QApplication.instance()
+#     if app is None:
+#         # 确保此功能在有QApplication实例的情况下被调用
+#         raise RuntimeError("截图功能必须在主程序事件循环下调用，不应单独创建QApplication实例！")
+#    
+#     widget = ScreenShotWidget(save_dir)
+#     # 使用exec_()来显示窗口，并阻塞直到它关闭
+#     widget.exec_()
+#     return widget.screenshot_path 
